@@ -1,0 +1,99 @@
+name: Deploy (ECS Blue/Green)
+
+on:
+  push:
+    branches: [ "main" ]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-north-1
+  ECR_REPOSITORY: ecs-platform-dev-backend
+  CODEDEPLOY_APP: ecs-platform-dev-cd-app
+  CODEDEPLOY_DG: ecs-platform-dev-cd-dg
+  CLUSTER_NAME: ecs-platform-dev-cluster
+  SERVICE_NAME: ecs-platform-dev-service
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::636851749897:role/ecs-platform-dev-github-actions
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to ECR
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          ECR_URI=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}
+
+          docker build -t ${ECR_URI}:${IMAGE_TAG} ./app
+          docker push ${ECR_URI}:${IMAGE_TAG}
+
+          echo "ECR_URI=${ECR_URI}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+
+      - name: Prepare task definition (new image)
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ecs-platform-dev-task \
+            --query taskDefinition > taskdef.json
+
+          cat taskdef.json | jq 'del(
+            .taskDefinitionArn,
+            .revision,
+            .status,
+            .requiresAttributes,
+            .compatibilities,
+            .registeredAt,
+            .registeredBy
+          )' > taskdef-clean.json
+
+          cat taskdef-clean.json | jq --arg IMAGE "${ECR_URI}:${IMAGE_TAG}" '
+            .containerDefinitions |=
+            (map(if .name == "app" then .image=$IMAGE else . end))
+          ' > taskdef-new.json
+
+      - name: Register new task definition
+        run: |
+          NEW_TD_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://taskdef-new.json \
+            --query taskDefinition.taskDefinitionArn \
+            --output text)
+
+          echo "NEW_TD_ARN=${NEW_TD_ARN}" >> $GITHUB_ENV
+          echo "${NEW_TD_ARN}"
+
+      - name: Create CodeDeploy AppSpec + create deployment
+        run: |
+          cat > appspec.yaml <<EOF
+          version: 1
+          Resources:
+            - TargetService:
+                Type: AWS::ECS::Service
+                Properties:
+                  TaskDefinition: "${NEW_TD_ARN}"
+                  LoadBalancerInfo:
+                    ContainerName: "app"
+                    ContainerPort: 8000
+          EOF
+
+          aws deploy create-deployment \
+            --application-name "${CODEDEPLOY_APP}" \
+            --deployment-group-name "${CODEDEPLOY_DG}" \
+            --revision "revisionType=AppSpecContent,appSpecContent={content=$(cat appspec.yaml | base64 -w 0)}" \
+            --description "GitHub Actions deploy $GITHUB_SHA"
+
