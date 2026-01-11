@@ -13,6 +13,7 @@ env:
   ECR_REPOSITORY: ecs-platform-dev-backend
   CODEDEPLOY_APP: ecs-platform-dev-cd-app
   CODEDEPLOY_DG: ecs-platform-dev-cd-dg
+  ECS_TASK_FAMILY: ecs-platform-dev-task
 
 jobs:
   deploy:
@@ -23,9 +24,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install jq
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -36,27 +35,22 @@ jobs:
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push image to ECR
-        env:
-          IMAGE_TAG: ${{ github.sha }}
+      - name: Build & push Docker image
         run: |
-          set -euo pipefail
-
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          IMAGE_TAG=${GITHUB_SHA}
           ECR_URI=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}
-
-          echo "ECR_URI=${ECR_URI}" >> $GITHUB_ENV
-          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
 
           docker build -t ${ECR_URI}:${IMAGE_TAG} ./app
           docker push ${ECR_URI}:${IMAGE_TAG}
 
-      - name: Prepare task definition (new image)
-        run: |
-          set -euo pipefail
+          echo "ECR_URI=${ECR_URI}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
 
+      - name: Prepare task definition
+        run: |
           aws ecs describe-task-definition \
-            --task-definition ecs-platform-dev-task \
+            --task-definition ${ECS_TASK_FAMILY} \
             --query taskDefinition > taskdef.json
 
           jq 'del(
@@ -67,68 +61,30 @@ jobs:
             .compatibilities,
             .registeredAt,
             .registeredBy
-          )' taskdef.json > taskdef-clean.json
+          ) | (.containerDefinitions[] | select(.name=="app") | .image) = "'${ECR_URI}:${IMAGE_TAG}'"' \
+          taskdef.json > taskdef-new.json
 
-          jq --arg IMAGE "${ECR_URI}:${IMAGE_TAG}" '
-            .containerDefinitions |=
-              (map(if .name == "app" then .image=$IMAGE else . end))
-          ' taskdef-clean.json > taskdef-new.json
-
-      - name: Debug taskdef image (must be ECR)
+      - name: Register task definition
         run: |
-          set -euo pipefail
-          echo "IMAGE SHOULD BE: ${ECR_URI}:${IMAGE_TAG}"
-          echo "IMAGE IN TASKDEF:"
-          jq -r '.containerDefinitions[] | select(.name=="app") | .image' taskdef-new.json
-
-      - name: Register new task definition
-        run: |
-          set -euo pipefail
-
           NEW_TD_ARN=$(aws ecs register-task-definition \
             --cli-input-json file://taskdef-new.json \
             --query taskDefinition.taskDefinitionArn \
             --output text)
 
           echo "NEW_TD_ARN=${NEW_TD_ARN}" >> $GITHUB_ENV
-          echo "Registered: ${NEW_TD_ARN}"
+          echo "Registered ${NEW_TD_ARN}"
 
-      - name: Create CodeDeploy deployment (Blue/Green)
+      - name: Create AppSpec file
         run: |
-          set -euo pipefail
+          printf "version: 1\nResources:\n  - TargetService:\n      Type: AWS::ECS::Service\n      Properties:\n        TaskDefinition: %s\n        LoadBalancerInfo:\n          ContainerName: app\n          ContainerPort: 8000\n" \
+          "$NEW_TD_ARN" > appspec.yaml
 
-          # Generate appspec.yaml safely (no heredoc -> no YAML break)
-          python3 - <<'PY'
-import os, pathlib
-new_td = os.environ["NEW_TD_ARN"]
-appspec = f"""version: 1
-Resources:
-  - TargetService:
-      Type: AWS::ECS::Service
-      Properties:
-        TaskDefinition: {new_td}
-        LoadBalancerInfo:
-          ContainerName: app
-          ContainerPort: 8000
-"""
-pathlib.Path("appspec.yaml").write_text(appspec)
-print("appspec.yaml written")
-PY
+          cat appspec.yaml
 
-          python3 - <<'PY'
-import json, pathlib, os
-content = pathlib.Path("appspec.yaml").read_text()
-payload = {
-  "applicationName": os.environ["CODEDEPLOY_APP"],
-  "deploymentGroupName": os.environ["CODEDEPLOY_DG"],
-  "revision": {
-    "revisionType": "AppSpecContent",
-    "appSpecContent": { "content": content }
-  },
-  "description": f"GitHub Actions DEV deploy {os.environ.get('GITHUB_SHA','')}"
-}
-pathlib.Path("deploy.json").write_text(json.dumps(payload))
-print("deploy.json written")
-PY
-
-          aws deploy create-deployment --cli-input-json file://deploy.json
+      - name: Deploy via CodeDeploy (Blue/Green)
+        run: |
+          aws deploy create-deployment \
+            --application-name "${CODEDEPLOY_APP}" \
+            --deployment-group-name "${CODEDEPLOY_DG}" \
+            --revision "revisionType=AppSpecContent,appSpecContent={content=$(base64 -w 0 appspec.yaml)}" \
+            --description "DEV Blue/Green deploy ${GITHUB_SHA}"
