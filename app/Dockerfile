@@ -1,3 +1,13 @@
-FROM hashicorp/http-echo:0.2.3
-CMD ["-listen=:8000","-text={\"status\":\"ok\"}"]
+FROM node:20-alpine
 
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm install --omit=dev
+
+COPY . .
+
+EXPOSE 8000
+ENV PORT=8000
+
+CMD ["npm","start"]
