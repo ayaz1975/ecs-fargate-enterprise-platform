@@ -18,13 +18,14 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -51,10 +52,7 @@ jobs:
       - name: Prepare task definition (new image)
         run: |
           set -euo pipefail
-
-          aws ecs describe-task-definition \
-            --task-definition ${ECS_TASK_FAMILY} \
-            --query taskDefinition > taskdef.json
+          aws ecs describe-task-definition --task-definition ${ECS_TASK_FAMILY} --query taskDefinition > taskdef.json
 
           jq 'del(
             .taskDefinitionArn,
@@ -67,47 +65,28 @@ jobs:
           )' taskdef.json > taskdef-clean.json
 
           jq --arg IMAGE "${ECR_URI}:${IMAGE_TAG}" '
-            .containerDefinitions |=
-              (map(if .name == "app" then .image=$IMAGE else . end))
+            .containerDefinitions |= (map(if .name == "app" then .image=$IMAGE else . end))
           ' taskdef-clean.json > taskdef-new.json
 
       - name: Register new task definition
         run: |
           set -euo pipefail
-
-          NEW_TD_ARN=$(aws ecs register-task-definition \
-            --cli-input-json file://taskdef-new.json \
-            --query taskDefinition.taskDefinitionArn \
-            --output text)
-
+          NEW_TD_ARN=$(aws ecs register-task-definition --cli-input-json file://taskdef-new.json --query taskDefinition.taskDefinitionArn --output text)
           echo "NEW_TD_ARN=${NEW_TD_ARN}" >> $GITHUB_ENV
           echo "Registered ${NEW_TD_ARN}"
 
-      - name: Create AppSpec file (safe)
+      - name: Create AppSpec (no indentation issues)
         run: |
           set -euo pipefail
-
-          python3 -c 'import os; td=os.environ["NEW_TD_ARN"].strip(); open("appspec.yaml","w").write(
-"version: 1\n"
-"Resources:\n"
-"  - TargetService:\n"
-"      Type: AWS::ECS::Service\n"
-"      Properties:\n"
-f"        TaskDefinition: \"{td}\"\n"
-"        LoadBalancerInfo:\n"
-"          ContainerName: app\n"
-"          ContainerPort: 8000\n"
-)'
-
-          echo "=== appspec.yaml ==="
+          printf "version: 1\nResources:\n  - TargetService:\n      Type: AWS::ECS::Service\n      Properties:\n        TaskDefinition: %s\n        LoadBalancerInfo:\n          ContainerName: app\n          ContainerPort: 8000\n" "$NEW_TD_ARN" > appspec.yaml
           cat appspec.yaml
 
-      - name: Deploy via CodeDeploy (Blue/Green)
+      - name: Create CodeDeploy deployment (Blue/Green)
         run: |
           set -euo pipefail
-
+          CONTENT=$(base64 -w 0 appspec.yaml)
           aws deploy create-deployment \
             --application-name "${CODEDEPLOY_APP}" \
             --deployment-group-name "${CODEDEPLOY_DG}" \
-            --revision "revisionType=AppSpecContent,appSpecContent={content=$(base64 -w 0 appspec.yaml)}" \
+            --revision "revisionType=AppSpecContent,appSpecContent={content=$CONTENT}" \
             --description "DEV Blue/Green deploy ${GITHUB_SHA}"
