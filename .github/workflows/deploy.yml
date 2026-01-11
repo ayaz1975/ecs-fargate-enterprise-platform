@@ -68,11 +68,10 @@ jobs:
             .registeredBy
           )' taskdef.json > taskdef-clean.json
 
-          # FIX: container exits with code 9 (SIGKILL) -> usually OOM.
-          # Bump Fargate task resources.
+          # FIX: exitCode 9 (SIGKILL) -> usually OOM. Give more resources.
           jq --arg IMAGE "${ECR_URI}:${IMAGE_TAG}" '
-            .cpu = "512" |
-            .memory = "1024" |
+            .cpu = "1024" |
+            .memory = "2048" |
             .containerDefinitions |=
               map(if .name=="app" then .image=$IMAGE else . end)
           ' taskdef-clean.json > taskdef-new.json
@@ -106,7 +105,6 @@ jobs:
 
       - name: Trigger CodeDeploy Blue/Green deployment (safe revision.json)
         run: |
-          # IMPORTANT: Pass AppSpecContent via JSON file (keeps newlines/indentation)
           jq -n --rawfile c appspec.yaml '{
             revisionType: "AppSpecContent",
             appSpecContent: { content: $c }
