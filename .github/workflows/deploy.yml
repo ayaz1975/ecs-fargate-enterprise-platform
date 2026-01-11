@@ -56,7 +56,7 @@ jobs:
             --task-definition ${ECS_TASK_FAMILY} \
             --query taskDefinition > taskdef.json
 
-      - name: Prepare new task definition
+      - name: Prepare new task definition (bump cpu/memory + update image)
         run: |
           jq 'del(
             .taskDefinitionArn,
@@ -68,9 +68,13 @@ jobs:
             .registeredBy
           )' taskdef.json > taskdef-clean.json
 
+          # FIX: container exits with code 9 (SIGKILL) -> usually OOM.
+          # Bump Fargate task resources.
           jq --arg IMAGE "${ECR_URI}:${IMAGE_TAG}" '
+            .cpu = "512" |
+            .memory = "1024" |
             .containerDefinitions |=
-            map(if .name=="app" then .image=$IMAGE else . end)
+              map(if .name=="app" then .image=$IMAGE else . end)
           ' taskdef-clean.json > taskdef-new.json
 
       - name: Register new task definition
