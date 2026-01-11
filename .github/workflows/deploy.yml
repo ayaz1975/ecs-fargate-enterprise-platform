@@ -83,7 +83,6 @@ jobs:
           echo "NEW_TD_ARN=${NEW_TD_ARN}" >> $GITHUB_ENV
           echo "NEW TASK DEF: ${NEW_TD_ARN}"
 
-      # IMPORTANT: CodeDeploy expects plain AppSpec content (YAML/JSON), NOT base64.
       - name: Create AppSpec (YAML)
         run: |
           cat > appspec.yaml <<EOF
@@ -101,14 +100,20 @@ jobs:
           echo "=== appspec.yaml ==="
           cat appspec.yaml
 
-      - name: Trigger CodeDeploy Blue/Green deployment
+      - name: Trigger CodeDeploy Blue/Green deployment (safe revision.json)
         run: |
-          # Safely encode multi-line YAML as a JSON string for the CLI parameter
-          CONTENT=$(jq -Rs . < appspec.yaml)
+          # IMPORTANT: Pass AppSpecContent via JSON file (keeps newlines/indentation)
+          jq -n --rawfile c appspec.yaml '{
+            revisionType: "AppSpecContent",
+            appSpecContent: { content: $c }
+          }' > revision.json
+
+          echo "=== revision.json ==="
+          cat revision.json
 
           aws deploy create-deployment \
             --application-name "${CODEDEPLOY_APP}" \
             --deployment-group-name "${CODEDEPLOY_DG}" \
-            --revision "revisionType=AppSpecContent,appSpecContent={content=${CONTENT}}" \
+            --revision file://revision.json \
             --description "GitHub Actions deploy ${GITHUB_SHA}"
 
