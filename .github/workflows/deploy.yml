@@ -97,18 +97,23 @@ jobs:
         run: |
           set -euo pipefail
 
-          # IMPORTANT: no leading spaces in YAML
-          cat > appspec.yaml <<EOF2
-version: 1
+          # Generate appspec.yaml safely (no heredoc -> no YAML break)
+          python3 - <<'PY'
+import os, pathlib
+new_td = os.environ["NEW_TD_ARN"]
+appspec = f"""version: 1
 Resources:
   - TargetService:
       Type: AWS::ECS::Service
       Properties:
-        TaskDefinition: ${NEW_TD_ARN}
+        TaskDefinition: {new_td}
         LoadBalancerInfo:
           ContainerName: app
           ContainerPort: 8000
-EOF2
+"""
+pathlib.Path("appspec.yaml").write_text(appspec)
+print("appspec.yaml written")
+PY
 
           python3 - <<'PY'
 import json, pathlib, os
