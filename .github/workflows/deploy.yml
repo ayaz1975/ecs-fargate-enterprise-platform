@@ -83,38 +83,32 @@ jobs:
           echo "NEW_TD_ARN=${NEW_TD_ARN}" >> $GITHUB_ENV
           echo "NEW TASK DEF: ${NEW_TD_ARN}"
 
-      - name: Create AppSpec (JSON, NOT YAML)
+      # IMPORTANT: CodeDeploy expects plain AppSpec content (YAML/JSON), NOT base64.
+      - name: Create AppSpec (YAML)
         run: |
-          cat > appspec.json <<EOF
-          {
-            "version": 1,
-            "Resources": [
-              {
-                "TargetService": {
-                  "Type": "AWS::ECS::Service",
-                  "Properties": {
-                    "TaskDefinition": "${NEW_TD_ARN}",
-                    "LoadBalancerInfo": {
-                      "ContainerName": "app",
-                      "ContainerPort": 8000
-                    }
-                  }
-                }
-              }
-            ]
-          }
+          cat > appspec.yaml <<EOF
+          version: 0.0
+          Resources:
+            - TargetService:
+                Type: AWS::ECS::Service
+                Properties:
+                  TaskDefinition: "${NEW_TD_ARN}"
+                  LoadBalancerInfo:
+                    ContainerName: "app"
+                    ContainerPort: 8000
           EOF
+
+          echo "=== appspec.yaml ==="
+          cat appspec.yaml
 
       - name: Trigger CodeDeploy Blue/Green deployment
         run: |
-          ENCODED=$(cat appspec.json | base64 | tr -d '\n')
+          # Safely encode multi-line YAML as a JSON string for the CLI parameter
+          CONTENT=$(jq -Rs . < appspec.yaml)
 
           aws deploy create-deployment \
             --application-name "${CODEDEPLOY_APP}" \
             --deployment-group-name "${CODEDEPLOY_DG}" \
-            --revision "revisionType=AppSpecContent,appSpecContent={content=${ENCODED}}" \
+            --revision "revisionType=AppSpecContent,appSpecContent={content=${CONTENT}}" \
             --description "GitHub Actions deploy ${GITHUB_SHA}"
-
-
-
 
