@@ -97,20 +97,33 @@ jobs:
         run: |
           set -euo pipefail
 
+          # IMPORTANT: no leading spaces in YAML
           cat > appspec.yaml <<EOF2
-          version: 1
-          Resources:
-            - TargetService:
-                Type: AWS::ECS::Service
-                Properties:
-                  TaskDefinition: "${NEW_TD_ARN}"
-                  LoadBalancerInfo:
-                    ContainerName: "app"
-                    ContainerPort: 8000
-          EOF2
+version: 1
+Resources:
+  - TargetService:
+      Type: AWS::ECS::Service
+      Properties:
+        TaskDefinition: ${NEW_TD_ARN}
+        LoadBalancerInfo:
+          ContainerName: app
+          ContainerPort: 8000
+EOF2
 
-          aws deploy create-deployment \
-            --application-name "${CODEDEPLOY_APP}" \
-            --deployment-group-name "${CODEDEPLOY_DG}" \
-            --revision "revisionType=AppSpecContent,appSpecContent={content=$(base64 -w 0 appspec.yaml)}" \
-            --description "GitHub Actions DEV deploy $GITHUB_SHA"
+          python3 - <<'PY'
+import json, pathlib, os
+content = pathlib.Path("appspec.yaml").read_text()
+payload = {
+  "applicationName": os.environ["CODEDEPLOY_APP"],
+  "deploymentGroupName": os.environ["CODEDEPLOY_DG"],
+  "revision": {
+    "revisionType": "AppSpecContent",
+    "appSpecContent": { "content": content }
+  },
+  "description": f"GitHub Actions DEV deploy {os.environ.get('GITHUB_SHA','')}"
+}
+pathlib.Path("deploy.json").write_text(json.dumps(payload))
+print("deploy.json written")
+PY
+
+          aws deploy create-deployment --cli-input-json file://deploy.json
