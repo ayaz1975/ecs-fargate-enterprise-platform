@@ -1,0 +1,86 @@
+{
+  "taskDefinitionArn": "arn:aws:ecs:eu-north-1:636851749897:task-definition/ecs-platform-dev-task:13",
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "636851749897.dkr.ecr.eu-north-1.amazonaws.com/ecs-platform-dev-api:d379dc8",
+      "cpu": 0,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "hostPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "essential": true,
+      "environment": [
+        {
+          "name": "PORT",
+          "value": "8000"
+        }
+      ],
+      "mountPoints": [],
+      "volumesFrom": [],
+      "secrets": [
+        {
+          "name": "DB_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:eu-north-1:636851749897:secret:ecs-platform-dev/db-08999d7a-OubJqS"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/ecs-platform-dev",
+          "awslogs-region": "eu-north-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "systemControls": []
+    }
+  ],
+  "family": "ecs-platform-dev-task",
+  "executionRoleArn": "arn:aws:iam::636851749897:role/ecs-platform-dev-ecs-task-execution",
+  "networkMode": "awsvpc",
+  "revision": 13,
+  "volumes": [],
+  "status": "ACTIVE",
+  "requiresAttributes": [
+    {
+      "name": "com.amazonaws.ecs.capability.logging-driver.awslogs"
+    },
+    {
+      "name": "ecs.capability.execution-role-awslogs"
+    },
+    {
+      "name": "com.amazonaws.ecs.capability.ecr-auth"
+    },
+    {
+      "name": "com.amazonaws.ecs.capability.docker-remote-api.1.19"
+    },
+    {
+      "name": "ecs.capability.secrets.asm.environment-variables"
+    },
+    {
+      "name": "ecs.capability.execution-role-ecr-pull"
+    },
+    {
+      "name": "com.amazonaws.ecs.capability.docker-remote-api.1.18"
+    },
+    {
+      "name": "ecs.capability.task-eni"
+    }
+  ],
+  "placementConstraints": [],
+  "compatibilities": [
+    "EC2",
+    "MANAGED_INSTANCES",
+    "FARGATE"
+  ],
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "256",
+  "memory": "512",
+  "registeredAt": "2026-01-11T09:46:33.582000+04:00",
+  "registeredBy": "arn:aws:sts::636851749897:assumed-role/ecs-platform-dev-github-actions/GitHubActions"
+}
