@@ -70,11 +70,12 @@ jobs:
 
           # FIX: exitCode 9 (SIGKILL) -> usually OOM. Give more resources.
           jq --arg IMAGE "${ECR_URI}:${IMAGE_TAG}" '
-            .cpu = "2048" |
-            .memory = "4096" |
-            .containerDefinitions |=
-              map(if .name=="app" then .image=$IMAGE else . end)
-          ' taskdef-clean.json > taskdef-new.json
+          .cpu = "2048" |
+         .memory = "4096" |
+         .containerDefinitions |=
+          map(if .name=="app" then (.image=$IMAGE | del(.command)) else . end)
+        ' taskdef-clean.json > taskdef-new.json
+
 
       - name: Register new task definition
         run: |
