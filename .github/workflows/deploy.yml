@@ -18,11 +18,12 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install jq
+      - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y jq
@@ -36,11 +37,11 @@ jobs:
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build & push Docker image
+      - name: Build and push Docker image
+        env:
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          set -euo pipefail
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          IMAGE_TAG=${GITHUB_SHA}
           ECR_URI=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}
 
           docker build -t ${ECR_URI}:${IMAGE_TAG} ./app
@@ -49,11 +50,14 @@ jobs:
           echo "ECR_URI=${ECR_URI}" >> $GITHUB_ENV
           echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
 
-      - name: Prepare task definition (new image)
+      - name: Get current task definition
         run: |
-          set -euo pipefail
-          aws ecs describe-task-definition --task-definition ${ECS_TASK_FAMILY} --query taskDefinition > taskdef.json
+          aws ecs describe-task-definition \
+            --task-definition ${ECS_TASK_FAMILY} \
+            --query taskDefinition > taskdef.json
 
+      - name: Prepare new task definition
+        run: |
           jq 'del(
             .taskDefinitionArn,
             .revision,
@@ -65,28 +69,52 @@ jobs:
           )' taskdef.json > taskdef-clean.json
 
           jq --arg IMAGE "${ECR_URI}:${IMAGE_TAG}" '
-            .containerDefinitions |= (map(if .name == "app" then .image=$IMAGE else . end))
+            .containerDefinitions |=
+            map(if .name=="app" then .image=$IMAGE else . end)
           ' taskdef-clean.json > taskdef-new.json
 
       - name: Register new task definition
         run: |
-          set -euo pipefail
-          NEW_TD_ARN=$(aws ecs register-task-definition --cli-input-json file://taskdef-new.json --query taskDefinition.taskDefinitionArn --output text)
+          NEW_TD_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://taskdef-new.json \
+            --query taskDefinition.taskDefinitionArn \
+            --output text)
+
           echo "NEW_TD_ARN=${NEW_TD_ARN}" >> $GITHUB_ENV
-          echo "Registered ${NEW_TD_ARN}"
+          echo "NEW TASK DEF: ${NEW_TD_ARN}"
 
-      - name: Create AppSpec (no indentation issues)
+      - name: Create AppSpec (JSON, NOT YAML)
         run: |
-          set -euo pipefail
-          printf "version: 1\nResources:\n  - TargetService:\n      Type: AWS::ECS::Service\n      Properties:\n        TaskDefinition: %s\n        LoadBalancerInfo:\n          ContainerName: app\n          ContainerPort: 8000\n" "$NEW_TD_ARN" > appspec.yaml
-          cat appspec.yaml
+          cat > appspec.json <<EOF
+          {
+            "version": 1,
+            "Resources": [
+              {
+                "TargetService": {
+                  "Type": "AWS::ECS::Service",
+                  "Properties": {
+                    "TaskDefinition": "${NEW_TD_ARN}",
+                    "LoadBalancerInfo": {
+                      "ContainerName": "app",
+                      "ContainerPort": 8000
+                    }
+                  }
+                }
+              }
+            ]
+          }
+          EOF
 
-      - name: Create CodeDeploy deployment (Blue/Green)
+      - name: Trigger CodeDeploy Blue/Green deployment
         run: |
-          set -euo pipefail
-          CONTENT=$(base64 -w 0 appspec.yaml)
+          ENCODED=$(cat appspec.json | base64 | tr -d '\n')
+
           aws deploy create-deployment \
             --application-name "${CODEDEPLOY_APP}" \
             --deployment-group-name "${CODEDEPLOY_DG}" \
-            --revision "revisionType=AppSpecContent,appSpecContent={content=$CONTENT}" \
-            --description "DEV Blue/Green deploy ${GITHUB_SHA}"
+            --revision "revisionType=AppSpecContent,appSpecContent={content=${ENCODED}}" \
+            --description "GitHub Actions deploy ${GITHUB_SHA}"
+
+
+
+
