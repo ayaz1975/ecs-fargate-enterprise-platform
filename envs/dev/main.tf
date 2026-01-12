@@ -105,9 +105,23 @@ module "github_oidc" {
   project_name = var.project_name
   environment  = var.environment
 
-  github_org  ="aazmamedov"
+  github_org  ="ayaz1975"
   github_repo ="ecs-fargate-enterprise-platform"
 
   aws_region = var.aws_region
+}
+module "monitoring" {
+  source = "../../modules/monitoring"
+
+  project_name = var.project_name
+  environment  = var.environment
+
+  alert_email = "mamedovayaz45@gmail.com"
+
+  alb_arn_suffix              = module.alb.alb_arn_suffix
+  target_group_blue_arn_suffix = module.alb.target_group_blue_arn_suffix
+
+  ecs_cluster_name = module.ecs.ecs_cluster_name
+  ecs_service_name = module.ecs.ecs_service_name
 }
 
