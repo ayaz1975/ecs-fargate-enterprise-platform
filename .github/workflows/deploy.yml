@@ -2,6 +2,9 @@ name: Deploy DEV (ECS Blue/Green)
 
 on:
   workflow_dispatch:
+  # если хочешь чтобы запускалось от пуша в main — раскомментируй
+  # push:
+  #   branches: [ main ]
 
 permissions:
   id-token: write
@@ -29,11 +32,21 @@ jobs:
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build, tag, and push image to ECR
         env:
           IMAGE_TAG: ${{ github.sha }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
         run: |
+          set -euo pipefail
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          ECR_URI=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}
-          docker build -t ${ECR_URI}:${IMAGE_TAG} ./app
-          docker push ${ECR_URI}:${IMAGE_TAG}
+          ECR_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}"
+
+          echo "ECR_URI=$ECR_URI"
+          echo "IMAGE_TAG=$IMAGE_TAG"
+
+          docker build -t "${ECR_URI}:${IMAGE_TAG}" ./app
+          docker push "${ECR_URI}:${IMAGE_TAG}"
