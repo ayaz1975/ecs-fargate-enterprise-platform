@@ -1,9 +1,7 @@
 name: Deploy CLIENT1-DEV (ECS Blue/Green)
 
 on:
-  push:
-    branches: [ "main" ]
-
+  workflow_dispatch:
 permissions:
   id-token: write
   contents: read
