@@ -12,7 +12,7 @@ env:
   AWS_REGION: eu-north-1
   ECR_REPOSITORY: ecs-platform-dev-backend
   CODEDEPLOY_APP: ecs-platform-dev-cd-app
-  CODEDEPLOY_DG: client1-dev-cd-dg
+  CODEDEPLOY_DG: ecs-platform-dev-cd-dg
   ECS_TASK_FAMILY: client1-dev-task
 
 jobs:
