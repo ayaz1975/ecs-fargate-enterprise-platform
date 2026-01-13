@@ -1,10 +1,6 @@
-name: Deploy DEV (ECS Blue/Green)
+name: Deploy DEV (BlueGreen)
 
-on:
-  workflow_dispatch:
-  # если хочешь чтобы запускалось от пуша в main — раскомментируй
-  # push:
-  #   branches: [ main ]
+on: [workflow_dispatch]
 
 permissions:
   id-token: write
@@ -15,38 +11,62 @@ env:
   ECR_REPOSITORY: ecs-platform-dev-backend
   CODEDEPLOY_APP: ecs-platform-dev-cd-app
   CODEDEPLOY_DG: ecs-platform-dev-cd-dg
+  CONTAINER_NAME: app
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
 
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::636851749897:role/ecs-platform-dev-github-actions
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: eu-north-1
 
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2
+      - uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build, tag, and push image to ECR
-        env:
-          IMAGE_TAG: ${{ github.sha }}
-          AWS_REGION: ${{ env.AWS_REGION }}
-          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+      - name: Build & Push image
+        id: build
         run: |
-          set -euo pipefail
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          ECR_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}"
+          IMAGE="$ACCOUNT_ID.dkr.ecr.eu-north-1.amazonaws.com/ecs-platform-dev-backend:$GITHUB_SHA"
+          echo "IMAGE=$IMAGE" >> $GITHUB_OUTPUT
+          docker build -t $IMAGE ./app
+          docker push $IMAGE
 
-          echo "ECR_URI=$ECR_URI"
-          echo "IMAGE_TAG=$IMAGE_TAG"
+      - name: Register new task definition
+        id: taskdef
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ecs-platform-dev-task \
+            --region eu-north-1 \
+          | jq '.taskDefinition
+            | del(
+              .revision,
+              .status,
+              .requiresAttributes,
+              .compatibilities,
+              .registeredAt,
+              .registeredBy,
+              .taskDefinitionArn
+            )
+            | (.containerDefinitions[] | select(.name=="app") | .image) = "${{ steps.build.outputs.IMAGE }}"' \
+          > taskdef.json
 
-          docker build -t "${ECR_URI}:${IMAGE_TAG}" ./app
-          docker push "${ECR_URI}:${IMAGE_TAG}"
+          ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://taskdef.json \
+            --region eu-north-1 \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          echo "ARN=$ARN" >> $GITHUB_OUTPUT
+
+      - name: BlueGreen deploy
+        run: |
+          aws deploy create-deployment \
+            --application-name ecs-platform-dev-cd-app \
+            --deployment-group-name ecs-platform-dev-cd-dg \
+            --revision revisionType=AppSpecContent,appSpecContent={content=$(base64 appspec.yaml)} \
+            --region eu-north-1
