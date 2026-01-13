@@ -10,7 +10,7 @@ permissions:
 
 env:
   AWS_REGION: eu-north-1
-  ECR_REPOSITORY: client1-dev-backend
+  ECR_REPOSITORY: ecs-platform-dev-backend
   CODEDEPLOY_APP: client1-dev-cd-app
   CODEDEPLOY_DG: client1-dev-cd-dg
   ECS_TASK_FAMILY: client1-dev-task
