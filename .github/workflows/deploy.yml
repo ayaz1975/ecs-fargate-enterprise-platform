@@ -121,3 +121,4 @@ EOF
             --deployment-group-name "${CODEDEPLOY_DG}" \
             --revision file://revision.json \
             --description "GitHub Actions deploy ${GITHUB_SHA}"
+
