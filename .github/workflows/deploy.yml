@@ -1,4 +1,4 @@
-name: Deploy (ECS Blue/Green) - DEV
+name: Deploy (ECS Blue/Green) - CLIENT1-DEV
 
 on:
   push:
@@ -10,10 +10,12 @@ permissions:
 
 env:
   AWS_REGION: eu-north-1
-  ECR_REPOSITORY: ecs-platform-dev-backend
-  CODEDEPLOY_APP: ecs-platform-dev-cd-app
-  CODEDEPLOY_DG: ecs-platform-dev-cd-dg
-  ECS_TASK_FAMILY: ecs-platform-dev-task
+
+  # CLIENT1 DEV names (from terraform outputs)
+  ECR_REPOSITORY: client1-dev-backend
+  CODEDEPLOY_APP: client1-dev-cd-app
+  CODEDEPLOY_DG: client1-dev-cd-dg
+  ECS_TASK_FAMILY: client1-dev-task
 
 jobs:
   deploy:
@@ -31,7 +33,7 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::636851749897:role/ecs-platform-dev-github-actions
+          role-to-assume: arn:aws:iam::636851749897:role/client1-dev-github-actions
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
@@ -41,6 +43,8 @@ jobs:
         env:
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          set -euo pipefail
+
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           ECR_URI=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}
 
@@ -52,12 +56,15 @@ jobs:
 
       - name: Get current task definition
         run: |
+          set -euo pipefail
           aws ecs describe-task-definition \
-            --task-definition ${ECS_TASK_FAMILY} \
+            --task-definition "${ECS_TASK_FAMILY}" \
             --query taskDefinition > taskdef.json
 
-      - name: Prepare new task definition (bump cpu/memory + update image)
+      - name: Prepare new task definition (update image)
         run: |
+          set -euo pipefail
+
           jq 'del(
             .taskDefinitionArn,
             .revision,
@@ -68,16 +75,18 @@ jobs:
             .registeredBy
           )' taskdef.json > taskdef-clean.json
 
-          # Keep resources high, update image, and REMOVE "command" to avoid bad args.
           jq --arg IMAGE "${ECR_URI}:${IMAGE_TAG}" '
-            .cpu = "2048" |
-            .memory = "4096" |
             .containerDefinitions |=
-              map(if .name=="app" then (.image=$IMAGE | del(.command)) else . end)
+              (map(if .name=="app" then (.image=$IMAGE) else . end))
           ' taskdef-clean.json > taskdef-new.json
+
+          echo "IMAGE IN TASKDEF:"
+          jq -r '.containerDefinitions[] | select(.name=="app") | .image' taskdef-new.json
 
       - name: Register new task definition
         run: |
+          set -euo pipefail
+
           NEW_TD_ARN=$(aws ecs register-task-definition \
             --cli-input-json file://taskdef-new.json \
             --query taskDefinition.taskDefinitionArn \
@@ -86,36 +95,29 @@ jobs:
           echo "NEW_TD_ARN=${NEW_TD_ARN}" >> $GITHUB_ENV
           echo "NEW TASK DEF: ${NEW_TD_ARN}"
 
-      - name: Create AppSpec (YAML)
+      - name: Create CodeDeploy deployment (AppSpec via JSON)
         run: |
+          set -euo pipefail
+
           cat > appspec.yaml <<EOF
-          version: 0.0
-          Resources:
-            - TargetService:
-                Type: AWS::ECS::Service
-                Properties:
-                  TaskDefinition: "${NEW_TD_ARN}"
-                  LoadBalancerInfo:
-                    ContainerName: "app"
-                    ContainerPort: 8000
-          EOF
+version: 1
+Resources:
+  - TargetService:
+      Type: AWS::ECS::Service
+      Properties:
+        TaskDefinition: ${NEW_TD_ARN}
+        LoadBalancerInfo:
+          ContainerName: app
+          ContainerPort: 8000
+EOF
 
-          echo "=== appspec.yaml ==="
-          cat appspec.yaml
-
-      - name: Trigger CodeDeploy Blue/Green deployment (safe revision.json)
-        run: |
           jq -n --rawfile c appspec.yaml '{
             revisionType: "AppSpecContent",
             appSpecContent: { content: $c }
           }' > revision.json
-
-          echo "=== revision.json ==="
-          cat revision.json
 
           aws deploy create-deployment \
             --application-name "${CODEDEPLOY_APP}" \
             --deployment-group-name "${CODEDEPLOY_DG}" \
             --revision file://revision.json \
             --description "GitHub Actions deploy ${GITHUB_SHA}"
-
