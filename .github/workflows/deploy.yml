@@ -30,8 +30,9 @@ jobs:
       - name: Build & Push image
         id: build
         run: |
+          set -e
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          IMAGE="$ACCOUNT_ID.dkr.ecr.eu-north-1.amazonaws.com/ecs-platform-dev-backend:$GITHUB_SHA"
+          IMAGE="$ACCOUNT_ID.dkr.ecr.eu-north-1.amazonaws.com/${ECR_REPOSITORY}:${GITHUB_SHA}"
           echo "IMAGE=$IMAGE" >> $GITHUB_OUTPUT
           docker build -t $IMAGE ./app
           docker push $IMAGE
@@ -39,19 +40,20 @@ jobs:
       - name: Register new task definition
         id: taskdef
         run: |
+          set -e
           aws ecs describe-task-definition \
             --task-definition ecs-platform-dev-task \
             --region eu-north-1 \
           | jq '.taskDefinition
             | del(
-              .revision,
-              .status,
-              .requiresAttributes,
-              .compatibilities,
-              .registeredAt,
-              .registeredBy,
-              .taskDefinitionArn
-            )
+                .revision,
+                .status,
+                .requiresAttributes,
+                .compatibilities,
+                .registeredAt,
+                .registeredBy,
+                .taskDefinitionArn
+              )
             | (.containerDefinitions[] | select(.name=="app") | .image) = "${{ steps.build.outputs.IMAGE }}"' \
           > taskdef.json
 
@@ -65,8 +67,18 @@ jobs:
 
       - name: BlueGreen deploy
         run: |
+          set -e
+          cat > revision.json <<EOF
+          {
+            "revisionType": "AppSpecContent",
+            "appSpecContent": {
+              "content": "$(base64 appspec.yaml | tr -d '\n')"
+            }
+          }
+          EOF
+
           aws deploy create-deployment \
-            --application-name ecs-platform-dev-cd-app \
-            --deployment-group-name ecs-platform-dev-cd-dg \
-            --revision revisionType=AppSpecContent,appSpecContent={content=$(base64 appspec.yaml)} \
-            --region eu-north-1
+            --application-name ${CODEDEPLOY_APP} \
+            --deployment-group-name ${CODEDEPLOY_DG} \
+            --revision file://revision.json \
+            --region ${AWS_REGION}
