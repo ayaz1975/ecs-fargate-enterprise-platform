@@ -15,7 +15,7 @@ resource "aws_lb" "this" {
 
 # Target groups for Blue/Green
 resource "aws_lb_target_group" "blue" {
-  name        = "${local.name}-tg-blue"
+  name        = "${substr(local.name,0,23)}-tg-blue"
   port        = var.app_port
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
@@ -36,7 +36,7 @@ resource "aws_lb_target_group" "blue" {
 }
 
 resource "aws_lb_target_group" "green" {
-  name        = "${local.name}-tg-green"
+  name        = "${substr(local.name,0,23)}-tg-green"
   port        = var.app_port
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
