@@ -10,8 +10,6 @@ permissions:
 
 env:
   AWS_REGION: eu-north-1
-
-  # CLIENT1 DEV names (from terraform outputs)
   ECR_REPOSITORY: client1-dev-backend
   CODEDEPLOY_APP: client1-dev-cd-app
   CODEDEPLOY_DG: client1-dev-cd-dg
@@ -61,7 +59,7 @@ jobs:
             --task-definition "${ECS_TASK_FAMILY}" \
             --query taskDefinition > taskdef.json
 
-      - name: Prepare new task definition (update image)
+      - name: Prepare new task definition
         run: |
           set -euo pipefail
 
@@ -80,9 +78,6 @@ jobs:
               (map(if .name=="app" then (.image=$IMAGE) else . end))
           ' taskdef-clean.json > taskdef-new.json
 
-          echo "IMAGE IN TASKDEF:"
-          jq -r '.containerDefinitions[] | select(.name=="app") | .image' taskdef-new.json
-
       - name: Register new task definition
         run: |
           set -euo pipefail
@@ -93,23 +88,13 @@ jobs:
             --output text)
 
           echo "NEW_TD_ARN=${NEW_TD_ARN}" >> $GITHUB_ENV
-          echo "NEW TASK DEF: ${NEW_TD_ARN}"
 
-      - name: Create CodeDeploy deployment (AppSpec via JSON)
+      - name: Create CodeDeploy deployment
         run: |
           set -euo pipefail
 
-          cat > appspec.yaml <<EOF
-version: 1
-Resources:
-  - TargetService:
-      Type: AWS::ECS::Service
-      Properties:
-        TaskDefinition: ${NEW_TD_ARN}
-        LoadBalancerInfo:
-          ContainerName: app
-          ContainerPort: 8000
-EOF
+          printf "version: 1\nResources:\n  - TargetService:\n      Type: AWS::ECS::Service\n      Properties:\n        TaskDefinition: %s\n        LoadBalancerInfo:\n          ContainerName: app\n          ContainerPort: 8000\n" \
+          "${NEW_TD_ARN}" > appspec.yaml
 
           jq -n --rawfile c appspec.yaml '{
             revisionType: "AppSpecContent",
@@ -121,4 +106,3 @@ EOF
             --deployment-group-name "${CODEDEPLOY_DG}" \
             --revision file://revision.json \
             --description "GitHub Actions deploy ${GITHUB_SHA}"
-
