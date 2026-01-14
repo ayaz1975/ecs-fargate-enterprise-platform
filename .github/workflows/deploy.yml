@@ -17,12 +17,13 @@ jobs:
       AWS_REGION: eu-north-1
 
       # === ECR ===
+      # ВАЖНО: выбери правильный repo:
+      # - ecs-platform-dev-backend (часто backend)
+      # - ecs-platform-dev-api (если сервис называется api)
       ECR_REPO: ecs-platform-dev-backend
       IMAGE_TAG: ${{ github.sha }}
 
       # === ECS ===
-      ECS_CLUSTER: ecs-platform-dev-cluster
-      ECS_SERVICE: ecs-platform-dev-service
       CONTAINER_NAME: app
 
       # task definition template (in repo root)
@@ -60,20 +61,43 @@ jobs:
           echo "ECR_URI=$ECR_URI" >> $GITHUB_ENV
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
+          # Dockerfile is in ./app/Dockerfile
           docker build -t "$IMAGE" -f app/Dockerfile ./app
-
           docker push "$IMAGE"
 
-      - name: Prepare new task definition (set image)
+      - name: Prepare new task definition (clean + set image)
         run: |
           set -e
+
+          # 1) Make sure taskdef is in "register-task-definition" format
+          # (remove describe-task-definition fields like taskDefinitionArn, revision, status, requiresAttributes, etc.)
+          jq '{
+            family: .family,
+            taskRoleArn: .taskRoleArn,
+            executionRoleArn: .executionRoleArn,
+            networkMode: .networkMode,
+            containerDefinitions: .containerDefinitions,
+            volumes: .volumes,
+            placementConstraints: .placementConstraints,
+            requiresCompatibilities: .requiresCompatibilities,
+            cpu: .cpu,
+            memory: .memory,
+            pidMode: .pidMode,
+            ipcMode: .ipcMode,
+            proxyConfiguration: .proxyConfiguration,
+            inferenceAccelerators: .inferenceAccelerators,
+            ephemeralStorage: .ephemeralStorage,
+            runtimePlatform: .runtimePlatform
+          }' "$TASKDEF_TEMPLATE" > taskdef.clean.json
+
+          # 2) Set new image for container name "app"
           jq --arg IMAGE "$IMAGE" --arg NAME "$CONTAINER_NAME" '
             .containerDefinitions |=
               (map(if .name == $NAME then .image = $IMAGE else . end))
-          ' "$TASKDEF_TEMPLATE" > taskdef.new.json
+          ' taskdef.clean.json > taskdef.new.json
 
-          echo "Generated taskdef.new.json:"
-          cat taskdef.new.json | head -n 40
+          echo "taskdef.new.json (first lines):"
+          cat taskdef.new.json | head -n 80
 
       - name: Register new task definition
         run: |
@@ -91,16 +115,15 @@ jobs:
         run: |
           set -e
 
-          # CodeDeploy expects AppSpecContent as plain YAML text, NOT base64.
-          # AppSpec references "taskdef.json" — we create it from the new task definition.
+          # CodeDeploy AppSpec points to "taskdef.json"
           cp taskdef.new.json taskdef.json
 
-          # Build revision.json correctly (valid JSON with raw YAML content):
+          # Build revision.json correctly (valid JSON with raw YAML content)
           jq -n --rawfile appspec "$APPSPEC_FILE" \
             '{revisionType:"AppSpecContent", appSpecContent:{content:$appspec}}' > revision.json
 
           echo "revision.json (first lines):"
-          cat revision.json | head -n 40
+          cat revision.json | head -n 60
 
           aws deploy create-deployment \
             --application-name "$CODEDEPLOY_APP" \
