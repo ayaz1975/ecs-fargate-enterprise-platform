@@ -79,7 +79,7 @@ jobs:
             containerDefinitions: .containerDefinitions,
             volumes: .volumes,
             placementConstraints: .placementConstraints,
-            requiresCompatibilities: .requiresCompatibilities,
+            requiresCompatibilities: .requiresCompatibilities, 
             cpu: .cpu,
             memory: .memory,
             pidMode: .pidMode,
@@ -88,7 +88,8 @@ jobs:
             inferenceAccelerators: .inferenceAccelerators,
             ephemeralStorage: .ephemeralStorage,
             runtimePlatform: .runtimePlatform
-          }' "$TASKDEF_TEMPLATE" > taskdef.clean.json
+        } | with_entries(select(.value != null))' "$TASKDEF_TEMPLATE" > taskdef.clean.json
+
 
           # 2) Set new image for container name "app"
           jq --arg IMAGE "$IMAGE" --arg NAME "$CONTAINER_NAME" '
