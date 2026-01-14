@@ -37,7 +37,6 @@ resource "aws_iam_role" "github_actions" {
   })
 }
 
-# Minimal permissions for CI/CD: ECR push + ECS describe + CodeDeploy create deployment
 resource "aws_iam_role_policy" "github_actions" {
   name = "${local.name}-github-actions-policy"
   role = aws_iam_role.github_actions.id
@@ -45,18 +44,12 @@ resource "aws_iam_role_policy" "github_actions" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      # ECR auth
+
+      # ===== ECR =====
       {
         Effect = "Allow"
         Action = [
-          "ecr:GetAuthorizationToken"
-        ]
-        Resource = "*"
-      },
-      # ECR push/pull to repos
-      {
-        Effect = "Allow"
-        Action = [
+          "ecr:GetAuthorizationToken",
           "ecr:BatchCheckLayerAvailability",
           "ecr:CompleteLayerUpload",
           "ecr:InitiateLayerUpload",
@@ -69,41 +62,47 @@ resource "aws_iam_role_policy" "github_actions" {
         ]
         Resource = "*"
       },
-      # ECS read (needed to render taskdef, etc.)
+
+      # ===== ECS =====
       {
         Effect = "Allow"
         Action = [
-          "ecs:DescribeClusters",
-          "ecs:DescribeServices",
+          "ecs:RegisterTaskDefinition",
+          "ecs:DeregisterTaskDefinition",
           "ecs:DescribeTaskDefinition",
-          "ecs:ListTaskDefinitions"
+          "ecs:DescribeServices",
+          "ecs:DescribeClusters",
+          "ecs:ListTaskDefinitions",
+          "ecs:UpdateService"
         ]
         Resource = "*"
       },
-      # CodeDeploy deployment trigger
+
+      # ===== CodeDeploy (Blue/Green) =====
       {
         Effect = "Allow"
         Action = [
           "codedeploy:CreateDeployment",
           "codedeploy:GetDeployment",
           "codedeploy:GetDeploymentGroup",
-          "codedeploy:GetApplication"
+          "codedeploy:GetApplication",
+          "codedeploy:GetDeploymentConfig",
+          "codedeploy:RegisterApplicationRevision",
+          "codedeploy:ListApplications",
+          "codedeploy:ListDeploymentGroups",
+          "codedeploy:ListDeploymentConfigs",
+          "codedeploy:ListDeployments"
         ]
         Resource = "*"
       },
-      # Pass roles to ECS tasks (execution role)
+
+      # ===== PassRole =====
       {
-        Effect = "Allow"
-        Action = [
-          "iam:PassRole"
-        ]
+        Effect   = "Allow"
+        Action   = "iam:PassRole"
         Resource = "*"
       }
     ]
   })
-}
-
-output "github_actions_role_arn" {
-  value = aws_iam_role.github_actions.arn
 }
 

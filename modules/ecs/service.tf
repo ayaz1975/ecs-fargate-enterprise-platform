@@ -9,8 +9,8 @@ resource "aws_ecs_service" "this" {
   }
 
   network_configuration {
-    subnets         = var.private_subnet_ids
-    security_groups = [var.ecs_sg_id]
+    subnets          = var.private_subnet_ids
+    security_groups  = [var.ecs_sg_id]
     assign_public_ip = false
   }
 

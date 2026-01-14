@@ -26,13 +26,13 @@ module "alb" {
   project_name = var.project_name
   environment  = var.environment
 
-  vpc_id             = module.vpc.vpc_id
-  public_subnet_ids   = module.vpc.public_subnet_ids
-  alb_sg_id          = module.security.alb_sg_id
-  certificate_arn    = module.dns_acm.certificate_arn
+  vpc_id            = module.vpc.vpc_id
+  public_subnet_ids = module.vpc.public_subnet_ids
+  alb_sg_id         = module.security.alb_sg_id
+  certificate_arn   = module.dns_acm.certificate_arn
 
-  app_port           = 8000
-  health_check_path  = "/health"
+  app_port          = 8000
+  health_check_path = "/health"
 }
 
 module "dns_acm" {
@@ -61,16 +61,16 @@ module "ecs" {
   project_name = var.project_name
   environment  = var.environment
 
-  vpc_id              = module.vpc.vpc_id
-  private_subnet_ids  = module.vpc.private_subnet_ids
-  ecs_sg_id           = module.security.ecs_sg_id
+  vpc_id                = module.vpc.vpc_id
+  private_subnet_ids    = module.vpc.private_subnet_ids
+  ecs_sg_id             = module.security.ecs_sg_id
   target_group_blue_arn = module.alb.target_group_blue_arn
 
   container_port = 8000
   desired_count  = 1
-  cpu             = 256
-  memory          = 512
-  db_secret_arn = module.rds.db_secret_arn
+  cpu            = 256
+  memory         = 512
+  db_secret_arn  = module.rds.db_secret_arn
 
 }
 module "rds" {
@@ -105,8 +105,8 @@ module "github_oidc" {
   project_name = var.project_name
   environment  = var.environment
 
-  github_org  ="ayaz1975"
-  github_repo ="ecs-fargate-enterprise-platform"
+  github_org  = "ayaz1975"
+  github_repo = "ecs-fargate-enterprise-platform"
 
   aws_region = var.aws_region
 }
@@ -118,7 +118,7 @@ module "monitoring" {
 
   alert_email = "mamedovayaz45@gmail.com"
 
-  alb_arn_suffix              = module.alb.alb_arn_suffix
+  alb_arn_suffix               = module.alb.alb_arn_suffix
   target_group_blue_arn_suffix = module.alb.target_group_blue_arn_suffix
 
   ecs_cluster_name = module.ecs.ecs_cluster_name

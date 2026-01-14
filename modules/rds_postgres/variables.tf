@@ -19,27 +19,27 @@ variable "rds_sg_id" {
 }
 
 variable "db_name" {
-  type        = string
-  default     = "appdb"
+  type    = string
+  default = "appdb"
 }
 
 variable "db_username" {
-  type        = string
-  default     = "appuser"
+  type    = string
+  default = "appuser"
 }
 
 variable "allocated_storage" {
-  type        = number
-  default     = 20
+  type    = number
+  default = 20
 }
 
 variable "instance_class" {
-  type        = string
-  default     = "db.t4g.micro"
+  type    = string
+  default = "db.t4g.micro"
 }
 
 variable "backup_retention_period" {
-  type        = number
-  default     = 7
+  type    = number
+  default = 7
 }
 
