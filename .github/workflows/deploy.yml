@@ -72,7 +72,7 @@ jobs:
           {
             "revisionType": "AppSpecContent",
             "appSpecContent": {
-              "content": "$(base64 appspec.yaml | tr -d '\n')"
+              "content": "$(jq -Rs . < appspec.yaml)"
             }
           }
           EOF
