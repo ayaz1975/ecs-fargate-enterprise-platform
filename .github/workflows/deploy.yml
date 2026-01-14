@@ -5,6 +5,10 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -62,7 +66,6 @@ jobs:
       - name: Prepare new task definition (set image)
         run: |
           set -e
-          # берем template taskdef.json из репо и подставляем новый image
           jq --arg IMAGE "$IMAGE" --arg NAME "$CONTAINER_NAME" '
             .containerDefinitions |=
               (map(if .name == $NAME then .image = $IMAGE else . end))
@@ -88,13 +91,10 @@ jobs:
           set -e
 
           # CodeDeploy expects AppSpecContent as plain YAML text, NOT base64.
-          # Also AppSpec references "taskdef.json" — so we create it from the new task definition.
-          # We replace the TaskDefinition field inside the appspec to point to actual JSON file content.
-          #
-          # Create taskdef.json that CodeDeploy will use:
+          # AppSpec references "taskdef.json" — we create it from the new task definition.
           cp taskdef.new.json taskdef.json
 
-          # Build revision.json correctly:
+          # Build revision.json correctly (valid JSON with raw YAML content):
           jq -n --rawfile appspec "$APPSPEC_FILE" \
             '{revisionType:"AppSpecContent", appSpecContent:{content:$appspec}}' > revision.json
 
