@@ -17,25 +17,23 @@ jobs:
       AWS_REGION: eu-north-1
 
       # === ECR ===
-      # ВАЖНО: выбери правильный repo:
-      # - ecs-platform-dev-backend (часто backend)
-      # - ecs-platform-dev-api (если сервис называется api)
+      # В твоём аккаунте есть: ecs-platform-dev-backend и ecs-platform-dev-api
       ECR_REPO: ecs-platform-dev-backend
       IMAGE_TAG: ${{ github.sha }}
 
       # === ECS ===
       CONTAINER_NAME: app
 
-      # task definition template (in repo root)
+      # task definition template (repo root)
       TASKDEF_TEMPLATE: taskdef.json
 
       # === CodeDeploy (Blue/Green) ===
       CODEDEPLOY_APP: ecs-platform-dev-cd-app
       CODEDEPLOY_DG: ecs-platform-dev-cd-dg
 
-      # === Which appspec to use ===
+      # === AppSpec ===
       APPSPEC_FILE: appspec.yaml
-      # если хочешь dev-файл — поменяй на:
+      # если хочешь:
       # APPSPEC_FILE: appspec-dev.yaml
 
     steps:
@@ -61,7 +59,7 @@ jobs:
           echo "ECR_URI=$ECR_URI" >> $GITHUB_ENV
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
-          # Dockerfile is in ./app/Dockerfile
+          # Dockerfile находится в ./app/Dockerfile
           docker build -t "$IMAGE" -f app/Dockerfile ./app
           docker push "$IMAGE"
 
@@ -69,8 +67,7 @@ jobs:
         run: |
           set -e
 
-          # 1) Make sure taskdef is in "register-task-definition" format
-          # (remove describe-task-definition fields like taskDefinitionArn, revision, status, requiresAttributes, etc.)
+          # 1) привести taskdef к формату register-task-definition + удалить null поля
           jq '{
             family: .family,
             taskRoleArn: .taskRoleArn,
@@ -79,7 +76,7 @@ jobs:
             containerDefinitions: .containerDefinitions,
             volumes: .volumes,
             placementConstraints: .placementConstraints,
-            requiresCompatibilities: .requiresCompatibilities, 
+            requiresCompatibilities: .requiresCompatibilities,
             cpu: .cpu,
             memory: .memory,
             pidMode: .pidMode,
@@ -88,10 +85,9 @@ jobs:
             inferenceAccelerators: .inferenceAccelerators,
             ephemeralStorage: .ephemeralStorage,
             runtimePlatform: .runtimePlatform
-        } | with_entries(select(.value != null))' "$TASKDEF_TEMPLATE" > taskdef.clean.json
+          } | with_entries(select(.value != null))' "$TASKDEF_TEMPLATE" > taskdef.clean.json
 
-
-          # 2) Set new image for container name "app"
+          # 2) подставить новый image для контейнера app
           jq --arg IMAGE "$IMAGE" --arg NAME "$CONTAINER_NAME" '
             .containerDefinitions |=
               (map(if .name == $NAME then .image = $IMAGE else . end))
@@ -116,10 +112,10 @@ jobs:
         run: |
           set -e
 
-          # CodeDeploy AppSpec points to "taskdef.json"
+          # AppSpec ссылается на taskdef.json
           cp taskdef.new.json taskdef.json
 
-          # Build revision.json correctly (valid JSON with raw YAML content)
+          # Правильный revision.json с raw YAML (без base64)
           jq -n --rawfile appspec "$APPSPEC_FILE" \
             '{revisionType:"AppSpecContent", appSpecContent:{content:$appspec}}' > revision.json
 
