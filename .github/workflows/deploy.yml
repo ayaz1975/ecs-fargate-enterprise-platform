@@ -1,84 +1,109 @@
 name: Deploy DEV (BlueGreen)
 
-on: [workflow_dispatch]
-
-permissions:
-  id-token: write
-  contents: read
-
-env:
-  AWS_REGION: eu-north-1
-  ECR_REPOSITORY: ecs-platform-dev-backend
-  CODEDEPLOY_APP: ecs-platform-dev-cd-app
-  CODEDEPLOY_DG: ecs-platform-dev-cd-dg
-  CONTAINER_NAME: app
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
-    steps:
-      - uses: actions/checkout@v4
+    env:
+      AWS_REGION: eu-north-1
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      # === ECR ===
+      ECR_REPO: ecs-platform-dev
+      IMAGE_TAG: ${{ github.sha }}
+
+      # === ECS ===
+      ECS_CLUSTER: ecs-platform-dev-cluster
+      ECS_SERVICE: ecs-platform-dev-service
+      CONTAINER_NAME: app
+
+      # task definition template (in repo root)
+      TASKDEF_TEMPLATE: taskdef.json
+
+      # === CodeDeploy (Blue/Green) ===
+      CODEDEPLOY_APP: ecs-platform-dev-cd-app
+      CODEDEPLOY_DG: ecs-platform-dev-cd-dg
+
+      # === Which appspec to use ===
+      APPSPEC_FILE: appspec.yaml
+      # если хочешь dev-файл — поменяй на:
+      # APPSPEC_FILE: appspec-dev.yaml
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::636851749897:role/ecs-platform-dev-github-actions
-          aws-region: eu-north-1
+          aws-region: ${{ env.AWS_REGION }}
 
-      - uses: aws-actions/amazon-ecr-login@v2
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build & Push image
-        id: build
+      - name: Build and push Docker image
         run: |
           set -e
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          IMAGE="$ACCOUNT_ID.dkr.ecr.eu-north-1.amazonaws.com/${ECR_REPOSITORY}:${GITHUB_SHA}"
-          echo "IMAGE=$IMAGE" >> $GITHUB_OUTPUT
-          docker build -t $IMAGE ./app
-          docker push $IMAGE
+          ECR_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+          IMAGE="${ECR_URI}:${IMAGE_TAG}"
 
-      - name: Register new task definition
-        id: taskdef
+          echo "ECR_URI=$ECR_URI" >> $GITHUB_ENV
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Prepare new task definition (set image)
         run: |
           set -e
-          aws ecs describe-task-definition \
-            --task-definition ecs-platform-dev-task \
-            --region eu-north-1 \
-          | jq '.taskDefinition
-            | del(
-                .revision,
-                .status,
-                .requiresAttributes,
-                .compatibilities,
-                .registeredAt,
-                .registeredBy,
-                .taskDefinitionArn
-              )
-            | (.containerDefinitions[] | select(.name=="app") | .image) = "${{ steps.build.outputs.IMAGE }}"' \
-          > taskdef.json
+          # берем template taskdef.json из репо и подставляем новый image
+          jq --arg IMAGE "$IMAGE" --arg NAME "$CONTAINER_NAME" '
+            .containerDefinitions |=
+              (map(if .name == $NAME then .image = $IMAGE else . end))
+          ' "$TASKDEF_TEMPLATE" > taskdef.new.json
 
+          echo "Generated taskdef.new.json:"
+          cat taskdef.new.json | head -n 40
+
+      - name: Register new task definition
+        run: |
+          set -e
           ARN=$(aws ecs register-task-definition \
-            --cli-input-json file://taskdef.json \
-            --region eu-north-1 \
+            --cli-input-json file://taskdef.new.json \
+            --region "$AWS_REGION" \
             --query 'taskDefinition.taskDefinitionArn' \
             --output text)
 
-          echo "ARN=$ARN" >> $GITHUB_OUTPUT
+          echo "TASK_DEF_ARN=$ARN" >> $GITHUB_ENV
+          echo "Registered task definition: $ARN"
 
-      - name: BlueGreen deploy
+      - name: BlueGreen deploy (CodeDeploy)
         run: |
           set -e
-          cat > revision.json <<EOF
-          {
-            "revisionType": "AppSpecContent",
-            "appSpecContent": {
-              "content": "$(jq -Rs . < appspec.yaml)"
-            }
-          }
-          EOF
+
+          # CodeDeploy expects AppSpecContent as plain YAML text, NOT base64.
+          # Also AppSpec references "taskdef.json" — so we create it from the new task definition.
+          # We replace the TaskDefinition field inside the appspec to point to actual JSON file content.
+          #
+          # Create taskdef.json that CodeDeploy will use:
+          cp taskdef.new.json taskdef.json
+
+          # Build revision.json correctly:
+          jq -n --rawfile appspec "$APPSPEC_FILE" \
+            '{revisionType:"AppSpecContent", appSpecContent:{content:$appspec}}' > revision.json
+
+          echo "revision.json (first lines):"
+          cat revision.json | head -n 40
 
           aws deploy create-deployment \
-            --application-name ${CODEDEPLOY_APP} \
-            --deployment-group-name ${CODEDEPLOY_DG} \
+            --application-name "$CODEDEPLOY_APP" \
+            --deployment-group-name "$CODEDEPLOY_DG" \
             --revision file://revision.json \
-            --region ${AWS_REGION}
+            --region "$AWS_REGION"
+
