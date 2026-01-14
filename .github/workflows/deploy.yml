@@ -17,7 +17,7 @@ jobs:
       AWS_REGION: eu-north-1
 
       # === ECR ===
-      ECR_REPO: ecs-platform-dev
+      ECR_REPO: ecs-platform-dev-backend
       IMAGE_TAG: ${{ github.sha }}
 
       # === ECS ===
