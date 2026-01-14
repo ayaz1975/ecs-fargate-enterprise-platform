@@ -60,7 +60,8 @@ jobs:
           echo "ECR_URI=$ECR_URI" >> $GITHUB_ENV
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
-          docker build -t "$IMAGE" .
+          docker build -t "$IMAGE" -f app/Dockerfile ./app
+
           docker push "$IMAGE"
 
       - name: Prepare new task definition (set image)
