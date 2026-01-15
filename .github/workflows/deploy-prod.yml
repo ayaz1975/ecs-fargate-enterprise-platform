@@ -61,29 +61,26 @@ jobs:
           echo "taskdef_arn=$TASKDEF_ARN" >> $GITHUB_OUTPUT
           echo "Registered task definition: $TASKDEF_ARN"
 
-      - name: Create AppSpec file (ECS Blue/Green)
-        id: make_appspec
+      - name: Create CodeDeploy deployment (Blue/Green)
         env:
           TASKDEF_ARN: ${{ steps.register_taskdef.outputs.taskdef_arn }}
         run: |
-          cat > appspec.yaml <<EOF
-          version: 1
-          Resources:
-            - TargetService:
-                Type: AWS::ECS::Service
-                Properties:
-                  TaskDefinition: "$TASKDEF_ARN"
-                  LoadBalancerInfo:
-                    ContainerName: "${CONTAINER_NAME}"
-                    ContainerPort: ${CONTAINER_PORT}
-          EOF
-          echo "APPSPEC_B64=$(base64 -w 0 appspec.yaml)" >> $GITHUB_ENV
-          echo "Created appspec.yaml"
+          APPSPEC_CONTENT=$(cat <<EOF
+version: 1
+Resources:
+  - TargetService:
+      Type: AWS::ECS::Service
+      Properties:
+        TaskDefinition: "$TASKDEF_ARN"
+        LoadBalancerInfo:
+          ContainerName: "${CONTAINER_NAME}"
+          ContainerPort: ${CONTAINER_PORT}
+EOF
+)
+          APPSPEC_B64=$(echo "$APPSPEC_CONTENT" | base64 -w 0)
 
-      - name: Create CodeDeploy deployment (Blue/Green)
-        run: |
           aws deploy create-deployment \
             --application-name "${CODEDEPLOY_APP}" \
             --deployment-group-name "${CODEDEPLOY_DG}" \
-            --revision revisionType=AppSpecContent,appSpecContent="{content=${APPSPEC_B64}}"
+            --revision "revisionType=AppSpecContent,appSpecContent={content=${APPSPEC_B64}}"
 
