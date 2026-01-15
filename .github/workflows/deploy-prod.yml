@@ -50,14 +50,12 @@ jobs:
           ECR_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}"
           echo "ECR_URI=${ECR_URI}" >> "$GITHUB_ENV"
           echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"
-          echo "Building image: ${ECR_URI}:${IMAGE_TAG}"
           docker build -t "${ECR_URI}:${IMAGE_TAG}" ./app
           docker push "${ECR_URI}:${IMAGE_TAG}"
 
       - name: Prepare new task definition (from AWS, replace image)
         run: |
           set -euo pipefail
-
           echo "ECR_URI=${ECR_URI}"
           echo "IMAGE_TAG=${IMAGE_TAG}"
           if [ -z "${ECR_URI:-}" ] || [ -z "${IMAGE_TAG:-}" ]; then
@@ -81,7 +79,6 @@ jobs:
             .containerDefinitions |= (map(if .name == $NAME then .image=$IMAGE else . end))
           ' taskdef-clean.json > taskdef-new.json
 
-          echo "IMAGE IN NEW TASKDEF:"
           ACTUAL="$(jq -r --arg NAME "${CONTAINER_NAME}" '.containerDefinitions[] | select(.name==$NAME) | .image' taskdef-new.json)"
           echo "${ACTUAL}"
           echo "${ACTUAL}" | grep -q "${ECR_REPOSITORY}" || (echo "ERROR: Image was NOT replaced to ECR repo (${ECR_REPOSITORY})" && exit 1)
@@ -91,7 +88,6 @@ jobs:
           set -euo pipefail
           NEW_TD_ARN=$(aws ecs register-task-definition --cli-input-json file://taskdef-new.json --query taskDefinition.taskDefinitionArn --output text)
           echo "NEW_TD_ARN=${NEW_TD_ARN}" >> "$GITHUB_ENV"
-          echo "Registered: ${NEW_TD_ARN}"
 
       - name: Create CodeDeploy deployment (Blue/Green)
         run: |
@@ -110,3 +106,4 @@ Resources:
 EOF
 
           aws deploy create-deployment --application-name "${CODEDEPLOY_APP}" --deployment-group-name "${CODEDEPLOY_DG}" --revision "revisionType=AppSpecContent,appSpecContent={content=$(base64 -w 0 appspec.yaml)}" --description "GitHub Actions PROD deploy ${GITHUB_SHA}"
+
