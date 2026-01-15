@@ -10,13 +10,13 @@ app.get('/health', (req, res) => {
 app.get('/version', (req, res) => {
   res.json({
     version: '2.0.1',
-    message: 'client backend DEV v1',
+    message: 'client backend DEV v2',
     deployedAt: new Date().toISOString()
   });
 });
 
 app.get('/', (req, res) => {
-  res.send ("client-backend v1");
+  res.send ("client-backend v2");
 });
 
 app.listen(PORT, () => console.log(`Listening on ${PORT}`));
