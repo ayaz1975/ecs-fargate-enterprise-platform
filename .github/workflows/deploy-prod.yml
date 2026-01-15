@@ -2,22 +2,31 @@ name: Deploy PROD (ECS Blue/Green)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ "main" ]
 
 permissions:
   id-token: write
   contents: read
 
-env:
-  AWS_REGION: eu-north-1
-  ECR_REPOSITORY: ecs-platform-prod-backend
-  CODEDEPLOY_APP: ecs-platform-prod-cd-app
-  CODEDEPLOY_DG: ecs-platform-prod-cd-dg
-  CONTAINER_NAME: app
-  CONTAINER_PORT: 8000
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: eu-north-1
+
+      CODEDEPLOY_APP: ecs-platform-prod-cd-app
+      CODEDEPLOY_DG: ecs-platform-prod-cd-dg
+
+      ECS_CLUSTER: ecs-platform-prod-cluster
+      ECS_SERVICE: ecs-platform-prod-service
+
+      CONTAINER_NAME: app
+      CONTAINER_PORT: 8000
+
+      ECR_REPOSITORY: ecs-platform-prod-backend
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,58 +38,102 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
+        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build, tag, and push image to ECR
-        env:
-          IMAGE_TAG: ${{ github.sha }}
+        id: build-image
         run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          ECR_URI=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}
-          echo "ECR_URI=${ECR_URI}" >> $GITHUB_ENV
-          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
-          docker build -t ${ECR_URI}:${IMAGE_TAG} ./app
-          docker push ${ECR_URI}:${IMAGE_TAG}
+          ECR_REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+          IMAGE_TAG="${{ github.sha }}"
+          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_OUTPUT
+
+          docker build -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+
+      - name: Fetch current task definition
+        id: fetch-taskdef
+        run: |
+          aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --query "services[0].taskDefinition" \
+            --output text > taskdef_arn.txt
+
+          TASKDEF_ARN=$(cat taskdef_arn.txt)
+          echo "TASKDEF_ARN=$TASKDEF_ARN" >> $GITHUB_OUTPUT
+
+          aws ecs describe-task-definition \
+            --task-definition "$TASKDEF_ARN" \
+            --query "taskDefinition" \
+            --output json > taskdef.json
+
+      - name: Prepare image uri file
+        run: |
+          mkdir -p /home/runner/work/_temp
+          echo "${{ steps.build-image.outputs.IMAGE_URI }}" > /home/runner/work/_temp/image_uri.txt
 
       - name: Render task definition (replace image)
         run: |
-          if [ ! -f taskdef-new.json ]; then
-            echo "ERROR: taskdef-new.json not found in repo root"
-            exit 1
-          fi
-          sed "s|<IMAGE_URI>|${ECR_URI}:${IMAGE_TAG}|g" taskdef-new.json > taskdef-rendered.json
-          cat taskdef-rendered.json
+          python3 - <<'PY'
+          import json
+
+          IMAGE_URI = open("/home/runner/work/_temp/image_uri.txt","r").read().strip()
+          td = json.load(open("taskdef.json","r",encoding="utf-8"))
+
+          drop = {"taskDefinitionArn","revision","status","requiresAttributes","compatibilities","registeredAt","registeredBy"}
+          for k in list(td.keys()):
+              if k in drop:
+                  td.pop(k, None)
+
+          td["containerDefinitions"][0]["image"] = IMAGE_URI
+
+          json.dump(td, open("taskdef.rendered.json","w",encoding="utf-8"), indent=2)
+          print("Rendered taskdef.rendered.json with image:", IMAGE_URI)
+          PY
 
       - name: Register task definition
-        id: register_taskdef
+        id: register-taskdef
         run: |
-          TASKDEF_ARN=$(aws ecs register-task-definition \
-            --cli-input-json file://taskdef-rendered.json \
+          NEW_TASKDEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://taskdef.rendered.json \
             --query "taskDefinition.taskDefinitionArn" \
             --output text)
-          echo "taskdef_arn=$TASKDEF_ARN" >> $GITHUB_OUTPUT
-          echo "Registered task definition: $TASKDEF_ARN"
+
+          echo "taskdef_arn=$NEW_TASKDEF_ARN" >> $GITHUB_OUTPUT
+          echo "Registered task definition: $NEW_TASKDEF_ARN"
+
+      - name: Create AppSpec file (ECS Blue/Green)
+        id: create-appspec
+        run: |
+          TASKDEF_ARN="${{ steps.register-taskdef.outputs.taskdef_arn }}"
+
+          cat > appspec.yaml <<EOF
+          version: 1
+          Resources:
+            - TargetService:
+                Type: AWS::ECS::Service
+                Properties:
+                  TaskDefinition: "$TASKDEF_ARN"
+                  LoadBalancerInfo:
+                    ContainerName: "$CONTAINER_NAME"
+                    ContainerPort: $CONTAINER_PORT
+          EOF
+
+          echo "Created appspec.yaml"
+          APPSPEC_B64=$(base64 -w 0 appspec.yaml)
+          echo "appspec_b64=$APPSPEC_B64" >> $GITHUB_OUTPUT
 
       - name: Create CodeDeploy deployment (Blue/Green)
-        env:
-          TASKDEF_ARN: ${{ steps.register_taskdef.outputs.taskdef_arn }}
         run: |
-          APPSPEC_CONTENT=$(cat <<EOF
-version: 1
-Resources:
-  - TargetService:
-      Type: AWS::ECS::Service
-      Properties:
-        TaskDefinition: "$TASKDEF_ARN"
-        LoadBalancerInfo:
-          ContainerName: "${CONTAINER_NAME}"
-          ContainerPort: ${CONTAINER_PORT}
-EOF
-)
-          APPSPEC_B64=$(echo "$APPSPEC_CONTENT" | base64 -w 0)
+          APPSPEC_B64="${{ steps.create-appspec.outputs.appspec_b64 }}"
 
-          aws deploy create-deployment \
-            --application-name "${CODEDEPLOY_APP}" \
-            --deployment-group-name "${CODEDEPLOY_DG}" \
-            --revision "revisionType=AppSpecContent,appSpecContent={content=${APPSPEC_B64}}"
+          DEPLOYMENT_ID=$(aws deploy create-deployment \
+            --application-name "$CODEDEPLOY_APP" \
+            --deployment-group-name "$CODEDEPLOY_DG" \
+            --revision "revisionType=AppSpecContent,appSpecContent={content=$APPSPEC_B64}" \
+            --query "deploymentId" --output text)
 
+          echo "Deployment created: $DEPLOYMENT_ID"
