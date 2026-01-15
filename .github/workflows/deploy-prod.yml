@@ -12,7 +12,7 @@ env:
   ECR_REPOSITORY: ecs-platform-prod-backend
   CODEDEPLOY_APP: ecs-platform-prod-cd-app
   CODEDEPLOY_DG: ecs-platform-prod-cd-dg
-  CONTAINER_NAME: client-backend
+  CONTAINER_NAME: app
   CONTAINER_PORT: 8000
 
 jobs:
