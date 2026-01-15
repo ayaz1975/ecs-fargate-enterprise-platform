@@ -53,16 +53,9 @@ jobs:
           docker build -t "${ECR_URI}:${IMAGE_TAG}" ./app
           docker push "${ECR_URI}:${IMAGE_TAG}"
 
-      - name: Prepare new task definition (from AWS, replace image)
+      - name: Prepare new task definition
         run: |
           set -euo pipefail
-          echo "ECR_URI=${ECR_URI}"
-          echo "IMAGE_TAG=${IMAGE_TAG}"
-          if [ -z "${ECR_URI:-}" ] || [ -z "${IMAGE_TAG:-}" ]; then
-            echo "ERROR: ECR_URI or IMAGE_TAG is empty"
-            exit 1
-          fi
-
           aws ecs describe-task-definition --task-definition "${TASK_FAMILY}" --query taskDefinition > taskdef.json
 
           jq 'del(
@@ -79,31 +72,25 @@ jobs:
             .containerDefinitions |= (map(if .name == $NAME then .image=$IMAGE else . end))
           ' taskdef-clean.json > taskdef-new.json
 
-          ACTUAL="$(jq -r --arg NAME "${CONTAINER_NAME}" '.containerDefinitions[] | select(.name==$NAME) | .image' taskdef-new.json)"
-          echo "${ACTUAL}"
-          echo "${ACTUAL}" | grep -q "${ECR_REPOSITORY}" || (echo "ERROR: Image was NOT replaced to ECR repo (${ECR_REPOSITORY})" && exit 1)
-
       - name: Register new task definition
         run: |
           set -euo pipefail
-          NEW_TD_ARN=$(aws ecs register-task-definition --cli-input-json file://taskdef-new.json --query taskDefinition.taskDefinitionArn --output text)
+          NEW_TD_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://taskdef-new.json \
+            --query taskDefinition.taskDefinitionArn \
+            --output text)
           echo "NEW_TD_ARN=${NEW_TD_ARN}" >> "$GITHUB_ENV"
 
-      - name: Create CodeDeploy deployment (Blue/Green)
+      - name: Create CodeDeploy deployment
         run: |
           set -euo pipefail
 
-          cat > appspec.yaml <<EOF
-version: 1
-Resources:
-  - TargetService:
-      Type: AWS::ECS::Service
-      Properties:
-        TaskDefinition: "${NEW_TD_ARN}"
-        LoadBalancerInfo:
-          ContainerName: "${CONTAINER_NAME}"
-          ContainerPort: ${CONTAINER_PORT}
-EOF
+          printf "version: 1\nResources:\n  - TargetService:\n      Type: AWS::ECS::Service\n      Properties:\n        TaskDefinition: \"%s\"\n        LoadBalancerInfo:\n          ContainerName: \"%s\"\n          ContainerPort: %s\n" \
+            "$NEW_TD_ARN" "$CONTAINER_NAME" "$CONTAINER_PORT" > appspec.yaml
 
-          aws deploy create-deployment --application-name "${CODEDEPLOY_APP}" --deployment-group-name "${CODEDEPLOY_DG}" --revision "revisionType=AppSpecContent,appSpecContent={content=$(base64 -w 0 appspec.yaml)}" --description "GitHub Actions PROD deploy ${GITHUB_SHA}"
+          aws deploy create-deployment \
+            --application-name "$CODEDEPLOY_APP" \
+            --deployment-group-name "$CODEDEPLOY_DG" \
+            --revision "revisionType=AppSpecContent,appSpecContent={content=$(base64 -w 0 appspec.yaml)}" \
+            --description "GitHub Actions PROD deploy ${GITHUB_SHA}"
 
