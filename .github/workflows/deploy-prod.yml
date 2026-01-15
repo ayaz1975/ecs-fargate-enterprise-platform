@@ -50,8 +50,9 @@ jobs:
 
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_OUTPUT
 
-          docker build -t "$IMAGE_URI" .
+          docker build -t "$IMAGE_URI" -f app/Dockerfile app
           docker push "$IMAGE_URI"
+
 
       - name: Fetch current task definition
         id: fetch-taskdef
