@@ -12,6 +12,8 @@ env:
   ECR_REPOSITORY: ecs-platform-prod-backend
   CODEDEPLOY_APP: ecs-platform-prod-cd-app
   CODEDEPLOY_DG: ecs-platform-prod-cd-dg
+  CONTAINER_NAME: client-backend
+  CONTAINER_PORT: 8000
 
 jobs:
   deploy:
@@ -35,5 +37,53 @@ jobs:
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           ECR_URI=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}
+          echo "ECR_URI=${ECR_URI}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
           docker build -t ${ECR_URI}:${IMAGE_TAG} ./app
           docker push ${ECR_URI}:${IMAGE_TAG}
+
+      - name: Render task definition (replace image)
+        run: |
+          if [ ! -f taskdef-new.json ]; then
+            echo "ERROR: taskdef-new.json not found in repo root"
+            exit 1
+          fi
+          sed "s|<IMAGE_URI>|${ECR_URI}:${IMAGE_TAG}|g" taskdef-new.json > taskdef-rendered.json
+          cat taskdef-rendered.json
+
+      - name: Register task definition
+        id: register_taskdef
+        run: |
+          TASKDEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://taskdef-rendered.json \
+            --query "taskDefinition.taskDefinitionArn" \
+            --output text)
+          echo "taskdef_arn=$TASKDEF_ARN" >> $GITHUB_OUTPUT
+          echo "Registered task definition: $TASKDEF_ARN"
+
+      - name: Create AppSpec file (ECS Blue/Green)
+        id: make_appspec
+        env:
+          TASKDEF_ARN: ${{ steps.register_taskdef.outputs.taskdef_arn }}
+        run: |
+          cat > appspec.yaml <<EOF
+          version: 1
+          Resources:
+            - TargetService:
+                Type: AWS::ECS::Service
+                Properties:
+                  TaskDefinition: "$TASKDEF_ARN"
+                  LoadBalancerInfo:
+                    ContainerName: "${CONTAINER_NAME}"
+                    ContainerPort: ${CONTAINER_PORT}
+          EOF
+          echo "APPSPEC_B64=$(base64 -w 0 appspec.yaml)" >> $GITHUB_ENV
+          echo "Created appspec.yaml"
+
+      - name: Create CodeDeploy deployment (Blue/Green)
+        run: |
+          aws deploy create-deployment \
+            --application-name "${CODEDEPLOY_APP}" \
+            --deployment-group-name "${CODEDEPLOY_DG}" \
+            --revision revisionType=AppSpecContent,appSpecContent="{content=${APPSPEC_B64}}"
+
