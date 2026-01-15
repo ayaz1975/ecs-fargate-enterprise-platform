@@ -1,4 +1,3 @@
-cat > ~/ecs-fargate-enterprise-platform/app/server.js <<'EOF'
 const express = require('express');
 const app = express();
 
@@ -21,4 +20,3 @@ app.get('/', (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`Listening on ${PORT}`));
-EOF
